@@ -1,18 +1,17 @@
 require('dotenv').config();
-const { Telegraf } = require('telegraf');
-const express = require('express');
-const bodyParser = require('body-parser');
-const axios = require('axios');
+import { Telegraf } from 'telegraf';
+import express from 'express';
+import { json } from 'body-parser';
+import { post } from 'axios';
+
 const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const HYGRAPH_API = process.env.HYGRAPH_API_URL;
 const HYGRAPH_API_TOKEN = process.env.HYGRAPH_API_TOKEN;
 
-
-
 const requestHygraph = async (query, variables) => {
   try {
-    const response = await axios.post(
+    const response = await post(
       HYGRAPH_API,
       { query, variables },
       { headers: { Authorization: `Bearer ${HYGRAPH_API_TOKEN}` } }
@@ -24,21 +23,21 @@ const requestHygraph = async (query, variables) => {
 };
 
 // Webhook setup
-app.use(bodyParser.json());
+app.use(json());
 app.post('/api/bot', async (req, res) => {
   const update = req.body;
   try {
     await bot.handleUpdate(update);
     res.send('OK');
   } catch (error) {
+    console.error(error);
     res.status(500).send('Error processing update');
   }
 });
 
 // Set up webhook for Telegram
 const setWebhook = () => {
-  // biome-ignore lint/style/noUnusedTemplateLiteral: <explanation>
-  const webhookUrl = `https://blood-recon.vercel.app`;
+  const webhookUrl = `https://${process.env.VERCEL_URL}/api/bot`; // Dynamically use Vercel URL for webhook
   bot.telegram.setWebhook(webhookUrl).then(() => {
     console.log('Webhook set successfully');
   }).catch((error) => {
@@ -66,6 +65,7 @@ bot.start(async (ctx) => {
     ctx.reply(`Welcome ${name}!\n\nCommands:\n- /beadonor: Register as a donor\n- /requestblood: Request blood`);
   }
 });
+
 bot.command("beadonor", async (ctx) => {
   const userId = ctx.from.id;
   const name = `${ctx.from.first_name} ${ctx.from.last_name || ""}`.trim();
