@@ -1,10 +1,14 @@
 require('dotenv').config();
 const { Telegraf } = require('telegraf');
+const express = require('express');
+const bodyParser = require('body-parser');
 const axios = require('axios');
-
+const app = express();
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const HYGRAPH_API = process.env.HYGRAPH_API_URL;
 const HYGRAPH_API_TOKEN = process.env.HYGRAPH_API_TOKEN;
+
+
 
 const requestHygraph = async (query, variables) => {
   try {
@@ -19,24 +23,42 @@ const requestHygraph = async (query, variables) => {
   }
 };
 
+// Webhook setup
+app.use(bodyParser.json());
+app.post('/api/bot', async (req, res) => {
+  const update = req.body;
+  try {
+    await bot.handleUpdate(update);
+    res.send('OK');
+  } catch (error) {
+    res.status(500).send('Error processing update');
+  }
+});
+
+// Set up webhook for Telegram
+const setWebhook = () => {
+  // biome-ignore lint/style/noUnusedTemplateLiteral: <explanation>
+  const webhookUrl = `https://blood-recon.vercel.app`;
+  bot.telegram.setWebhook(webhookUrl).then(() => {
+    console.log('Webhook set successfully');
+  }).catch((error) => {
+    console.error('Error setting webhook:', error);
+  });
+};
 
 bot.start(async (ctx) => {
   const userId = ctx.from.id;
   const name = `${ctx.from.first_name} ${ctx.from.last_name || ""}`.trim();
-  const userName = ctx.from.username || 'Not Provided';
-
   const query = `
-  query($telegramId: String!) {
-    donors(where: { telegramId: $telegramId }) {
-      id
-      name
+    query($telegramId: String!) {
+      donors(where: { telegramId: $telegramId }) {
+        id
+        name
+      }
     }
-  }
-`;
-
+  `;
   const vars = { telegramId: String(userId) };
   const donorResponse = await requestHygraph(query, vars);
-
 
   if (donorResponse.data.donors.length > 0) {
     ctx.reply(`Welcome back, ${name}! You are already a registered donor.`);
@@ -44,11 +66,9 @@ bot.start(async (ctx) => {
     ctx.reply(`Welcome ${name}!\n\nCommands:\n- /beadonor: Register as a donor\n- /requestblood: Request blood`);
   }
 });
-
 bot.command("beadonor", async (ctx) => {
   const userId = ctx.from.id;
   const name = `${ctx.from.first_name} ${ctx.from.last_name || ""}`.trim();
-  const userName = ctx.from.username || 'Not Provided';
 
   ctx.reply(
     // biome-ignore lint/style/useTemplate: <explanation>
@@ -57,7 +77,6 @@ bot.command("beadonor", async (ctx) => {
     `1. Your Phone Number\n2. Blood Group (e.g., A+, B-, O+)\n3. Last Donation Date (yyyy-mm-dd)\n4. Location: Locality, Panchayat, District`
   );
 
-  // Set up a temporary state to capture user inputs
   const donorInfo = {
     telegramId: userId,
     name: name,
@@ -66,21 +85,29 @@ bot.command("beadonor", async (ctx) => {
     lastDonationDate: null,
     location: null
   };
+  const userState = {};
+
+  userState[userId] = donorInfo;
 
   bot.on('text', async (msgCtx) => {
     const responseText = msgCtx.message.text;
+    const userId = msgCtx.from.id;
 
-    if (!donorInfo.phoneNumber) {
-      donorInfo.phoneNumber = responseText;
+    const donor = userState[userId];
+
+    if (!donor) return;
+
+    if (!donor.phoneNumber) {
+      donor.phoneNumber = responseText;
       await msgCtx.reply("Please provide your blood group (e.g., A+, B-, O+).");
-    } else if (!donorInfo.bloodGroup) {
-      donorInfo.bloodGroup = responseText;
+    } else if (!donor.bloodGroup) {
+      donor.bloodGroup = responseText;
       await msgCtx.reply("Please provide your last donation date (yyyy-mm-dd).");
-    } else if (!donorInfo.lastDonationDate) {
-      donorInfo.lastDonationDate = responseText;
+    } else if (!donor.lastDonationDate) {
+      donor.lastDonationDate = responseText;
       await msgCtx.reply("Please provide your location (Locality, Panchayat, District).");
-    } else if (!donorInfo.location) {
-      donorInfo.location = responseText;
+    } else if (!donor.location) {
+      donor.location = responseText;
 
       const mutation = `
         mutation($data: DonorCreateInput!) {
@@ -93,30 +120,32 @@ bot.command("beadonor", async (ctx) => {
 
       const variables = {
         data: {
-          telegramId: String(donorInfo.telegramId),
-          name: donorInfo.name,
-          phoneNumber: donorInfo.phoneNumber,
-          bloodGroup: donorInfo.bloodGroup,
-          lastDonationDate: donorInfo.lastDonationDate,
+          telegramId: String(donor.telegramId),
+          name: donor.name,
+          phoneNumber: donor.phoneNumber,
+          bloodGroup: donor.bloodGroup,
+          lastDonationDate: donor.lastDonationDate,
           location: {
             create: {
-              locality: donorInfo.location.split(",")[0],
-              panchayat: donorInfo.location.split(",")[1],
-              district: donorInfo.location.split(",")[2]
+              locality: donor.location.split(",")[0],
+              panchayat: donor.location.split(",")[1],
+              district: donor.location.split(",")[2]
             }
           }
         }
       };
 
-
       await requestHygraph(mutation, variables);
       await msgCtx.reply("You have successfully registered as a blood donor! Thank you for your willingness to donate.");
+      
+      delete userState[userId];
     }
   });
 });
 
-
 bot.command("requestblood", async (ctx) => {
+  const userId = ctx.from.id;
+
   ctx.reply("What is your blood group? (e.g., A+, B-, O+)");
 
   bot.on("text", async (msgCtx) => {
@@ -131,7 +160,7 @@ bot.command("requestblood", async (ctx) => {
         const location = locCtx.message.text;
         const requestData = { bloodGroup, unitsNeeded, location };
 
-        //Eligible donors query
+        // Eligible donors query
         const query = `
           query($bloodGroup: String!, $location: String!) {
             donors(where: { bloodGroup: $bloodGroup, location_contains: $location }) {
@@ -165,5 +194,7 @@ bot.command("requestblood", async (ctx) => {
   });
 });
 
-bot.launch();
-
+app.listen(3000, () => {
+  console.log('Bot server is running on port 3000');
+  setWebhook();
+});
