@@ -17,7 +17,10 @@ const requestHygraph = async (query, variables) => {
     );
     return response.data;
   } catch (error) {
-    console.error('Error fetching from Hygraph:', error.response?.data || error);
+    console.error(
+      'Error fetching from Hygraph:',
+      error.response?.data || error
+    );
   }
 };
 
@@ -45,7 +48,9 @@ const donorRegistrationWizard = new Scenes.WizardScene(
   async (ctx) => {
     const bloodGroup = ctx.message.text;
     if (!bloodGroups.includes(bloodGroup)) {
-      await ctx.reply('Please select a valid blood group from the options provided.');
+      await ctx.reply(
+        'Please select a valid blood group from the options provided.'
+      );
       return;
     }
     ctx.wizard.state.donorInfo.bloodGroup = bloodGroup;
@@ -59,7 +64,9 @@ const donorRegistrationWizard = new Scenes.WizardScene(
       return;
     }
     ctx.wizard.state.donorInfo.lastDonationDate = date;
-    await ctx.reply('Please provide your location (Locality, Panchayat, District):');
+    await ctx.reply(
+      'Please provide your location (Locality, Panchayat, District):'
+    );
     return ctx.wizard.next();
   },
   async (ctx) => {
@@ -75,7 +82,9 @@ const donorRegistrationWizard = new Scenes.WizardScene(
         }
       }
     `;
-    const locationParts = donorInfo.location.split(',').map((part) => part.trim());
+    const locationParts = donorInfo.location
+      .split(',')
+      .map((part) => part.trim());
     const variables = {
       data: {
         telegramId: String(userId),
@@ -101,6 +110,34 @@ const donorRegistrationWizard = new Scenes.WizardScene(
         },
       }
     );
+    const rateLimit = {};
+    const LIMIT = 5; // Max requests
+    const TIME_WINDOW = 60000; // Time window in milliseconds (1 minute)
+
+    bot.use((ctx, next) => {
+      const userId = ctx.from.id;
+      const now = Date.now();
+
+      if (!rateLimit[userId]) {
+        rateLimit[userId] = [];
+      }
+
+      // Filter requests within the time window
+      rateLimit[userId] = rateLimit[userId].filter(
+        (timestamp) => now - timestamp < TIME_WINDOW
+      );
+
+      if (rateLimit[userId].length >= LIMIT) {
+        return ctx.reply(
+          'You are sending too many requests. Please try again later.'
+        );
+      }
+
+      // Record the current request time
+      rateLimit[userId].push(now);
+      return ctx.wizard.next();
+    });
+
     return ctx.scene.leave();
   }
 );
@@ -122,7 +159,9 @@ const bloodRequestWizard = new Scenes.WizardScene(
   async (ctx) => {
     const bloodGroup = ctx.message.text;
     if (!bloodGroups.includes(bloodGroup)) {
-      await ctx.reply('Please select a valid blood group from the options provided.');
+      await ctx.reply(
+        'Please select a valid blood group from the options provided.'
+      );
       return;
     }
     ctx.wizard.state.requestData.bloodGroup = bloodGroup;
@@ -171,11 +210,14 @@ Location: ${donor.location.locality}, ${donor.location.panchayat}, ${donor.locat
         `
         )
         .join('\n\n');
-      await ctx.reply(`We found eligible donors for your request:\n\n${donorsList}`, {
-        reply_markup: {
-          remove_keyboard: true,
-        },
-      });
+      await ctx.reply(
+        `We found eligible donors for your request:\n\n${donorsList}`,
+        {
+          reply_markup: {
+            remove_keyboard: true,
+          },
+        }
+      );
     } else {
       await ctx.reply('Sorry, no donors are available at the moment.', {
         reply_markup: {
