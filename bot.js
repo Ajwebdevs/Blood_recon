@@ -2,12 +2,44 @@ require('dotenv').config();
 const { Telegraf, Scenes, session } = require('telegraf');
 const axios = require('axios');
 
+// Initialize the bot and use session middleware
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 bot.use(session());
 
 const HYGRAPH_API = process.env.HYGRAPH_API_URL;
 const HYGRAPH_API_TOKEN = process.env.HYGRAPH_API_TOKEN;
 
+// Rate-limiting configuration
+const rateLimit = {};
+const LIMIT = 5; // Maximum requests per user
+const TIME_WINDOW = 60000; // Time window in milliseconds (1 minute)
+
+// Middleware for rate-limiting
+bot.use((ctx, next) => {
+  const userId = ctx.from.id; // Get user ID
+  const now = Date.now(); // Get current timestamp
+
+  // Initialize or clean up user's request history
+  if (!rateLimit[userId]) {
+    rateLimit[userId] = [];
+  }
+  rateLimit[userId] = rateLimit[userId].filter(
+    (timestamp) => now - timestamp < TIME_WINDOW
+  );
+
+  // If user exceeds the limit, block further requests
+  if (rateLimit[userId].length >= LIMIT) {
+    return ctx.reply(
+      'You are sending too many requests. Please try again later.'
+    );
+  }
+
+  // Log the current request
+  rateLimit[userId].push(now);
+  return next();
+});
+
+// Helper function to query the Hygraph API
 const requestHygraph = async (query, variables) => {
   try {
     const response = await axios.post(
@@ -24,6 +56,7 @@ const requestHygraph = async (query, variables) => {
   }
 };
 
+// Blood group options
 const bloodGroups = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
 
 // Donor Registration Wizard Scene
@@ -104,40 +137,8 @@ const donorRegistrationWizard = new Scenes.WizardScene(
     await requestHygraph(mutation, variables);
     await ctx.reply(
       'You have successfully registered as a blood donor! Thank you for your willingness to donate.',
-      {
-        reply_markup: {
-          remove_keyboard: true,
-        },
-      }
+      { reply_markup: { remove_keyboard: true } }
     );
-    const rateLimit = {};
-    const LIMIT = 5; // Max requests
-    const TIME_WINDOW = 60000; // Time window in milliseconds (1 minute)
-
-    bot.use((ctx, next) => {
-      const userId = ctx.from.id;
-      const now = Date.now();
-
-      if (!rateLimit[userId]) {
-        rateLimit[userId] = [];
-      }
-
-      // Filter requests within the time window
-      rateLimit[userId] = rateLimit[userId].filter(
-        (timestamp) => now - timestamp < TIME_WINDOW
-      );
-
-      if (rateLimit[userId].length >= LIMIT) {
-        return ctx.reply(
-          'You are sending too many requests. Please try again later.'
-        );
-      }
-
-      // Record the current request time
-      rateLimit[userId].push(now);
-      return ctx.wizard.next();
-    });
-
     return ctx.scene.leave();
   }
 );
@@ -170,7 +171,6 @@ const bloodRequestWizard = new Scenes.WizardScene(
   },
   async (ctx) => {
     const unitsNeeded = Number.parseInt(ctx.message.text, 10);
-    // biome-ignore lint/suspicious/noGlobalIsNan: <explanation>
     if (isNaN(unitsNeeded) || unitsNeeded <= 0) {
       await ctx.reply('Please enter a valid number for units needed.');
       return;
@@ -207,31 +207,29 @@ const bloodRequestWizard = new Scenes.WizardScene(
 Name: ${donor.name}
 Contact: ${donor.phoneNumber}
 Location: ${donor.location.locality}, ${donor.location.panchayat}, ${donor.location.district}
-        `
+          `
         )
         .join('\n\n');
       await ctx.reply(
         `We found eligible donors for your request:\n\n${donorsList}`,
         {
-          reply_markup: {
-            remove_keyboard: true,
-          },
+          reply_markup: { remove_keyboard: true },
         }
       );
     } else {
       await ctx.reply('Sorry, no donors are available at the moment.', {
-        reply_markup: {
-          remove_keyboard: true,
-        },
+        reply_markup: { remove_keyboard: true },
       });
     }
     return ctx.scene.leave();
   }
 );
 
+// Add scenes to the stage
 const stage = new Scenes.Stage([donorRegistrationWizard, bloodRequestWizard]);
 bot.use(stage.middleware());
 
+// Start command
 bot.start(async (ctx) => {
   const userId = ctx.from.id;
   const name = `${ctx.from.first_name} ${ctx.from.last_name || ''}`.trim();
@@ -254,6 +252,7 @@ bot.start(async (ctx) => {
   }
 });
 
+// Register command handlers
 bot.command('beadonor', async (ctx) => {
   await ctx.scene.enter('donor-registration');
 });
@@ -262,5 +261,6 @@ bot.command('requestblood', async (ctx) => {
   await ctx.scene.enter('blood-request');
 });
 
+// Launch the bot
 bot.launch();
 console.log('Bot is up and running.');
